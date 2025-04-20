@@ -1,0 +1,32 @@
+{
+  "name": "PerplexitySearchToolkit",
+  "version": "1.1.0",
+  "description": "Provides tools to interact directly with the Perplexity Search API.",
+  "tools": [
+    {
+      "name": "perplexity_search",
+      "function": "perplexity_search",
+      "description": "Performs a search query using the Perplexity API and returns the results as a JSON string.",
+      "inputs": [
+        "query:string",
+        "model:string (optional, defaults to 'sonar-pro')"
+      ],
+      "outputs": [
+        "results:string"
+      ],
+      "dependencies": []
+    }
+  ],
+  "requirements": {
+    "python_packages": [
+      "openai>=1.0"
+    ],
+    "api_keys": [
+      "PERPLEXITY_API_KEY"
+    ]
+  },
+  "loading_info": {
+    "type": "python_module",
+    "path": "tools.perplexity_search.perplexity_search_toolkit"
+  }
+}

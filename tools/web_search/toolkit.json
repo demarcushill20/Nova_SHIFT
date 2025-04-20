@@ -1,0 +1,22 @@
+{
+  "name": "WebSearchToolkit",
+  "version": "1.0.0",
+  "description": "Provides capabilities to search the web using an external API (e.g., Tavily).",
+  "tools": [
+    {
+      "name": "search_internet",
+      "function": "perform_web_search",
+      "description": "Performs a web search for a given query using an external search API (like Tavily) and returns a list of search results snippets or summaries.",
+      "inputs": [ "query:string" ],
+      "outputs": [ "results:list<string> | error:string" ]
+    }
+  ],
+  "requirements": {
+    "python_packages": ["tavily-python"],
+    "api_keys": ["TAVILY_API_KEY"]
+  },
+  "loading_info": {
+    "type": "python_module",
+    "path": "nova_shift.tools.web_search.web_search_toolkit"
+  }
+}

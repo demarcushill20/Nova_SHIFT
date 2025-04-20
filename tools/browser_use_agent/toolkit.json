@@ -1,0 +1,40 @@
+{
+  "name": "BrowserUseAgentToolkit",
+  "version": "1.0.0",
+  "description": "Provides tools to perform web browsing tasks using the browser-use library and Google Gemini.",
+  "tools": [
+    {
+      "name": "browser_use_tool",
+      "function": "run_browser_use_gemini_task",
+      "description": "Runs a web browsing task using the browser-use library with the Gemini 2.5 Pro model. Takes a task description and optional parameters for temperature, timeout, report generation, summarization, and output file.",
+      "inputs": [
+        "task_description:str",
+        "temperature:float=0.0",
+        "timeout:int=240",
+        "generate_report:bool=False",
+        "summarize:bool=False",
+        "output_file:Optional[str]=None",
+        "wrap_width:int=0"
+      ],
+      "outputs": [
+        "result:str"
+      ],
+      "dependencies": []
+    }
+  ],
+  "requirements": {
+    "python_packages": [
+      "browser-use>=0.1.0",
+      "langchain-google-genai>=0.0.1",
+      "playwright>=1.0.0",
+      "python-dotenv>=0.10.0"
+    ],
+    "api_keys": [
+      "GOOGLE_API_KEY"
+    ]
+  },
+  "loading_info": {
+    "type": "python_module",
+    "path": "nova_shift.tools.browser_use_agent.browser_use_agent_toolkit"
+  }
+}

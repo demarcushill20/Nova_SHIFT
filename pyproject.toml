@@ -1,0 +1,41 @@
+[project]
+name = "nova-shift"
+version = "0.1.0"
+description = "Nova SHIFT: Swarm-Hive Intelligence with Flexible Toolsets"
+readme = "README.md"
+requires-python = ">=3.10"
+# Add dependencies here if not relying solely on requirements.txt for distribution
+# dependencies = [
+#     "langchain",
+#     "openai",
+#     ...
+# ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"] # E203: whitespace before ':', W503: line break before binary operator (often conflicts with Black)
+exclude = [".venv", ".git", "__pycache__"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true # Start with this, can be tightened later
+
+[tool.setuptools]
+# Explicitly list the packages to include, resolving the flat-layout ambiguity
+packages = ["agents", "core", "tools", "config", "utils"]
+
+[tool.pytest.ini_options]
+# Add the project root directory to pytest's python path
+pythonpath = ["."]
+# Add asyncio mode setting here as well, addressing the deprecation warning
+asyncio_mode = "auto"

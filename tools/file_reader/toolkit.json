@@ -1,0 +1,19 @@
+{
+  "name": "FileReaderToolkit",
+  "version": "1.0.0",
+  "description": "Provides the capability to read text content from local files.",
+  "tools": [
+    {
+      "name": "read_file",
+      "function": "read_text_file",
+      "description": "Reads the entire text content of a specified local file. Assumes UTF-8 encoding. Returns the content as a single string or an error message.",
+      "inputs": [ "file_path:string" ],
+      "outputs": [ "content:string | error:string" ]
+    }
+  ],
+  "requirements": null,
+  "loading_info": {
+    "type": "python_module",
+    "path": "nova_shift.tools.file_reader.file_reader_toolkit"
+  }
+}

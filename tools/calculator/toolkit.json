@@ -1,0 +1,19 @@
+{
+  "name": "CalculatorToolkit",
+  "version": "1.0.0",
+  "description": "Provides basic arithmetic calculation capabilities.",
+  "tools": [
+    {
+      "name": "calculate",
+      "function": "calculate_expression",
+      "description": "Evaluates a mathematical expression (e.g., '2 + 2 * 5 / (3-1)') and returns the numerical result. Supports basic arithmetic operators: +, -, *, /, parentheses ().",
+      "inputs": [ "expression:string" ],
+      "outputs": [ "result:float | result:string" ]
+    }
+  ],
+  "requirements": null,
+  "loading_info": {
+    "type": "python_module",
+    "path": "nova_shift.tools.calculator.calculator_toolkit"
+  }
+}

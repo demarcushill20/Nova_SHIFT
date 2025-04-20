@@ -1,0 +1,33 @@
+# Core LLM and Agent Framework
+langchain
+openai
+google-generativeai
+pydantic # For data validation, including toolkit schema
+langchain-google-genai # Explicitly add to help resolver
+# google-generativeai # Duplicate removed
+langchain-openai # Required for OpenAI LLM integration
+
+# Testing
+pytest
+pytest-asyncio # For testing async code
+fakeredis[lua] # For mocking Redis in tests
+# Formatting and Linting
+black
+flake8
+mypy
+# Infrastructure / Communication
+redis # For Shared Memory and potentially messaging
+pinecone # For Long-Term Memory (Vector DB) - Package renamed
+
+# Tool Dependencies
+simpleeval # For safe evaluation in CalculatorToolkit
+tavily-python # For WebSearchToolkit
+# tavily-python # Duplicate removed
+smithery>=0.1.0 # For Brave Search MCP
+mcp>=0.1.0 # For Brave Search MCP
+browser-use>=0.1.0 # For BrowserUseAgentToolkit
+playwright>=1.0.0 # For BrowserUseAgentToolkit
+
+# Utilities
+psutil # For system monitoring (e.g., memory usage in sandbox)
+python-dotenv # To load environment variables from .env file
