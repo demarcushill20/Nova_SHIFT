@@ -73,7 +73,7 @@ You can interact with the Nova SHIFT system using the command-line interface (`c
 
 **Usage:**
 
-Navigate to the project root directory (`Desktop/NOVA_SHIFT`) and run:
+Navigate to the project root directory (`Desktop/NOVA-SHIFT-2.0`) and run:
 
 ```bash
 python cli.py "Your task description here"

@@ -21,7 +21,8 @@ load_dotenv()
 
 # LangChain components
 from langchain_google_genai import ChatGoogleGenerativeAI # Changed import
-from langchain.agents import AgentExecutor, create_google_genai_tools_agent # Changed import
+from langchain.agents import AgentExecutor
+from langchain.agents import create_tool_calling_agent # Changed import
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
 from langchain.memory import ConversationBufferMemory
@@ -369,7 +370,7 @@ class SpecialistAgent:
             # for agents using OpenAI tools/function calling.
             # Use the create_google_genai_tools_agent helper function
             # This function is designed for agents using Google Gemini's tool calling.
-            agent_runnable = create_google_genai_tools_agent(self.llm, self.tools, prompt) # Changed function call
+            agent_runnable = create_tool_calling_agent(self.llm, self.tools, prompt) # Changed function call
 
             # Create the AgentExecutor with the manually constructed runnable
             agent_executor = AgentExecutor(

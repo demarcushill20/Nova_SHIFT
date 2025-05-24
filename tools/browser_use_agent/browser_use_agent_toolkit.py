@@ -136,7 +136,7 @@ async def run_browser_use_gemini_task(
         str: The raw result text, or the generated summary/report if requested.
              Returns an error message string if execution fails.
     """
-    print(f"🚀 Starting browser-use task: {task_description}")
+    print(f"Starting browser-use task: {task_description}")
 
     google_api_key = os.getenv("GOOGLE_API_KEY")
     if not google_api_key:

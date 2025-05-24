@@ -35,6 +35,6 @@
   },
   "loading_info": {
     "type": "python_module",
-    "path": "nova_shift.tools.browser_use_agent.browser_use_agent_toolkit"
+    "path": "tools.browser_use_agent.browser_use_agent_toolkit"
   }
 }
