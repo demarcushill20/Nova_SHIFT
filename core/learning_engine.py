@@ -6,7 +6,12 @@ and updating system parameters like tool scores.
 import logging
 import asyncio
 import redis.asyncio as redis
-from typing import Dict, Optional
+from typing import Dict, List, Any, Optional # Added List, Any
+from datetime import datetime # Added for timestamping
+
+# Assuming LTMInterface will be imported if not already
+# from .ltm_interface import LTMInterface # Example import path
+LTMInterface = Any # Placeholder if direct import is complex here
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -29,19 +34,25 @@ class CollectiveLearningEngine:
         _client: Async Redis client instance.
     """
 
-    def __init__(self, host: str = REDIS_HOST, port: int = REDIS_PORT, db: int = REDIS_DB):
+    def __init__(self,
+                 ltm_interface: LTMInterface, # Added LTMInterface dependency
+                 host: str = REDIS_HOST,
+                 port: int = REDIS_PORT,
+                 db: int = REDIS_DB):
         """Initializes the CollectiveLearningEngine.
 
-        Sets up the Redis connection pool used to read usage logs and write scores.
+        Sets up the Redis connection pool and stores the LTM interface.
 
         Args:
+            ltm_interface (LTMInterface): Interface for long-term memory access.
             host (str): Redis server host. Defaults to REDIS_HOST.
             port (int): Redis server port. Defaults to REDIS_PORT.
             db (int): Redis database number. Defaults to REDIS_DB.
         """
+        self._ltm_interface = ltm_interface # Store LTMInterface
         self._pool = redis.ConnectionPool(host=host, port=port, db=db, decode_responses=True)
         self._client: Optional[redis.Redis] = None
-        logger.info(f"CollectiveLearningEngine initialized (pointing to {host}:{port}/{db}).")
+        logger.info(f"CollectiveLearningEngine initialized (pointing to {host}:{port}/{db}, LTMInterface provided).")
 
     async def _get_client(self) -> redis.Redis:
         """Gets or creates an async Redis client from the connection pool.
@@ -141,51 +152,157 @@ class CollectiveLearningEngine:
 
         return calculated_scores
 
+    async def analyze_task_outcome(self, task_id: str, success: bool, tools_used: List[str]):
+        """Analyzes task outcome, stores learning in LTM, and updates tool scores.
+        As per integration plan 3.3.1.
+        """
+        logger.info(f"Analyzing outcome for task_id='{task_id}', success={success}, tools_used={tools_used}")
+        # Store learning in hybrid memory (LTM via MCP)
+        learning_summary = f"Task {task_id}: {'Success' if success else 'Failure'} using {tools_used}"
+        metadata = {
+            "category": "collective_learning",
+            "task_id": task_id,
+            "success": success,
+            "tools": tools_used, # Storing as a list
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            store_response = await self._ltm_interface.store(text=learning_summary, metadata=metadata)
+            if store_response:
+                logger.info(f"Stored learning summary for task '{task_id}' to LTM. Response: {store_response}")
+            else:
+                logger.warning(f"Failed to store learning summary for task '{task_id}' to LTM (no response or error).")
+        except Exception as e:
+            logger.error(f"Error storing learning summary for task '{task_id}' to LTM: {e}", exc_info=True)
+
+        # Query related learning experiences
+        related_learning_query = f"collective learning {' '.join(tools_used)}"
+        related_learning_results: Optional[Dict[str, Any]] = None
+        try:
+            related_learning_results = await self._ltm_interface.retrieve(query_text=related_learning_query)
+            if related_learning_results:
+                logger.info(f"Retrieved related learning experiences for tools {tools_used} from LTM.")
+                # formatted_related_context = self._ltm_interface.format_context_for_llm(related_learning_results) # If needed
+                # logger.debug(f"Formatted related learning context:\n{formatted_related_context}")
+            else:
+                logger.info(f"No related learning experiences found for tools {tools_used} in LTM.")
+        except Exception as e:
+            logger.error(f"Error retrieving related learning for tools {tools_used} from LTM: {e}", exc_info=True)
+
+        # Update tool scores based on hybrid insights
+        # This method needs to be implemented based on how scores are managed and how hybrid insights influence them.
+        await self.update_tool_scores_with_context(tools_used, success, related_learning_results)
+
+    async def update_tool_scores_with_context(self, tools_used: List[str], success: bool, related_learning: Optional[Dict[str, Any]]):
+        """
+        Placeholder for updating tool scores based on task success and related learning context from LTM.
+        The actual scoring logic (how `related_learning` influences scores) needs to be defined.
+        This might involve more sophisticated logic than simple success/failure counts if hybrid insights
+        from LTM (vector + graph) are to be deeply integrated into scoring.
+        For now, it can call the existing Redis-based scoring or be extended.
+        """
+        logger.info(f"Placeholder: update_tool_scores_with_context called for tools={tools_used}, success={success}.")
+        if related_learning:
+            logger.debug(f"Related learning context received (first 100 chars): {str(related_learning)[:100]}...")
+        
+        # Option 1: Delegate to existing Redis-based scoring for now
+        # This doesn't use `related_learning` yet but keeps current functionality.
+        # For each tool used, one might log its individual success/failure to Redis
+        # if the `CollectiveLearningEngine`'s Redis methods are still the primary mechanism.
+        # Or, this method could directly update scores in Redis based on new logic.
+        
+        # Example: If we want to maintain the Redis-based success/failure counts
+        # This part would need access to the Redis client, similar to `calculate_and_store_tool_scores`
+        # client = await self._get_client()
+        # for tool_name in tools_used:
+        #     base_key = f"tool:{tool_name}"
+        #     await client.incr(f"{base_key}:usage_count")
+        #     if success:
+        #         await client.incr(f"{base_key}:success_count")
+        #     else:
+        #         await client.incr(f"{base_key}:failure_count")
+        # logger.info(f"Incremented Redis counters for tools: {tools_used} based on task success: {success}")
+
+        # Option 2: Implement new scoring logic here that uses `related_learning`.
+        # This is where the "hybrid insights" part of the plan would come in.
+        # For example, if related_learning shows similar past failures with these tools for similar tasks,
+        # the score update might be more nuanced.
+        
+        # For now, let's just log and perhaps call the existing score calculation
+        # to ensure scores are generally updated.
+        logger.info("Calling calculate_and_store_tool_scores to refresh overall scores based on Redis data.")
+        await self.calculate_and_store_tool_scores() # Recalculate all scores
+
     async def close(self):
         """Closes the Redis client and connection pool gracefully."""
         if self._client:
             await self._client.close()
         if self._pool:
             await self._pool.disconnect()
-        logger.info("CollectiveLearningEngine connection pool closed.")
+        # Also close LTM interface if it has a close method
+        if hasattr(self._ltm_interface, 'close') and asyncio.iscoroutinefunction(self._ltm_interface.close):
+            await self._ltm_interface.close()
+            logger.info("LTMInterface connection closed by CollectiveLearningEngine.")
+        logger.info("CollectiveLearningEngine connections closed.")
 
 # Example Usage
 async def main():
     print("Running CollectiveLearningEngine example...")
-    engine = CollectiveLearningEngine(db=1) # Use test DB if needed
 
-    # Simulate some tool usage data (replace with actual agent logging in practice)
-    print("Simulating tool usage data in Redis DB 1...")
+    # Mock LTMInterface for the example
+    class MockLTMInterface:
+        async def store(self, text: str, metadata: Dict):
+            print(f"LTM_STORE (Mock): Text='{text[:50]}...', Metadata={metadata}")
+            return {"status": "success", "id": "mock_ltm_id_" + metadata.get("task_id", "unknown")}
+        
+        async def retrieve(self, query_text: str, top_k: int = 5):
+            print(f"LTM_RETRIEVE (Mock): Query='{query_text[:50]}...', top_k={top_k}")
+            if "collective learning" in query_text:
+                return { # Simulating MCP-like response structure
+                    "vector_results": [
+                        {"text": "Previously, tool_A and tool_B failed on similar task_X.", "score": 0.8},
+                        {"text": "Tool_A was successful with tool_C on task_Y.", "score": 0.7}
+                    ],
+                    "graph_results": []
+                }
+            return None
+        
+        async def close(self):
+            print("LTM_CLOSE (Mock): Called.")
+
+    mock_ltm = MockLTMInterface()
+    engine = CollectiveLearningEngine(ltm_interface=mock_ltm, db=1) # Pass mock LTM
+
+    # Simulate some tool usage data (this part might be less relevant if analyze_task_outcome updates Redis directly)
+    print("Simulating initial tool usage data in Redis DB 1 (for calculate_and_store_tool_scores)...")
     client = await engine._get_client()
-    await client.set("tool:calculate:usage_count", 10)
-    await client.set("tool:calculate:success_count", 8)
-    await client.set("tool:calculate:failure_count", 2)
-    await client.set("tool:calculate:total_duration", 5.5)
-
-    await client.set("tool:search_internet:usage_count", 5)
-    await client.set("tool:search_internet:success_count", 5)
-    await client.set("tool:search_internet:failure_count", 0)
-    await client.set("tool:search_internet:total_duration", 12.1)
-
-    await client.set("tool:read_file:usage_count", 2)
-    await client.set("tool:read_file:success_count", 1)
-    await client.set("tool:read_file:failure_count", 1)
-    await client.set("tool:read_file:total_duration", 0.8)
+    await client.set("tool:tool_A:usage_count", 10)
+    await client.set("tool:tool_A:success_count", 8)
+    await client.set("tool:tool_B:usage_count", 5)
+    await client.set("tool:tool_B:success_count", 2)
     print("Simulated data written.")
 
-    # Calculate and store scores
-    print("\nCalculating and storing scores...")
+    # Test analyze_task_outcome
+    print("\nTesting analyze_task_outcome (Success)...")
+    await engine.analyze_task_outcome(task_id="task123", success=True, tools_used=["tool_A", "tool_C"])
+    
+    print("\nTesting analyze_task_outcome (Failure)...")
+    await engine.analyze_task_outcome(task_id="task456", success=False, tools_used=["tool_A", "tool_B"])
+
+    # Calculate and store scores (this will reflect any updates made by analyze_task_outcome if it modifies Redis directly)
+    print("\nCalculating and storing overall scores (after analyze_task_outcome calls)...")
     scores = await engine.calculate_and_store_tool_scores()
     print(f"\nCalculated Scores: {scores}")
 
     # Verify scores stored in Redis
     print("\nVerifying scores in Redis DB 1:")
-    calc_score = await client.get("tool:calculate:score")
-    search_score = await client.get("tool:search_internet:score")
-    read_score = await client.get("tool:read_file:score")
-    print(f"  tool:calculate:score = {calc_score}")
-    print(f"  tool:search_internet:score = {search_score}")
-    print(f"  tool:read_file:score = {read_score}")
+    tool_A_score = await client.get("tool:tool_A:score")
+    tool_B_score = await client.get("tool:tool_B:score")
+    tool_C_score = await client.get("tool:tool_C:score") # May or may not exist depending on analyze_task_outcome's Redis interaction
+    print(f"  tool:tool_A:score = {tool_A_score}")
+    print(f"  tool:tool_B:score = {tool_B_score}")
+    print(f"  tool:tool_C:score = {tool_C_score}")
+
 
     # Clean up test data and close connection
     await client.flushdb()

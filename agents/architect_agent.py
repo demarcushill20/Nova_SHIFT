@@ -23,26 +23,28 @@ ToolRegistry = Any
 # Basic prompt template for the Architect Agent
 ARCHITECT_PROMPT_TEMPLATE = """
 You are an expert AI System Architect within the Nova SHIFT framework.
-Your role is to devise high-level strategies and abstract plans for complex, novel, or ambiguous goals that the standard Planner Agent might struggle with.
+Your role is to devise high-level strategies and abstract plans for complex, novel, or ambiguous goals.
+Leverage collective agent knowledge and known solution patterns.
 
-Consider the overall system capabilities (available tools, agent types) and the user's ultimate objective.
+COMPLEX GOAL: {complex_goal}
 
-User Goal: "{goal}"
+PREVIOUS AGENT EXPERIENCES:
+{agent_experiences_context}
 
-Available Toolkits (Summary):
+KNOWN SOLUTION PATTERNS:
+{solution_patterns_context}
+
+Available Toolkits (Summary - for general awareness, but prioritize learned experiences and patterns):
 {tool_registry_summary}
 
-Relevant Context from LTM (if available):
-{ltm_context}
-
-Based on the goal and available resources, design a high-level strategic plan or workflow.
-The output should be a conceptual blueprint or a sequence of major phases/strategies, not necessarily granular subtasks like the Planner. Focus on *how* to approach the problem.
-Suggest potential new tool combinations or identify capability gaps if necessary.
-
-Output Format: Provide the strategic plan as a clear, structured text description.
+Based on the goal, past experiences, and known patterns, design a comprehensive solution.
+The output should be a conceptual blueprint or a sequence of major phases/strategies.
+Focus on *how* to approach the problem, leveraging collective knowledge.
 
 Strategic Plan:
 """
+# Note: tool_registry_summary and ltm_context (now agent_experiences_context) are still useful.
+# The new prompt structure is from plan 3.3.2
 
 class ArchitectAgent:
     """
@@ -90,60 +92,104 @@ class ArchitectAgent:
         if not self._ltm_interface:
             return "LTM interface is unavailable."
         try:
-            # Use a simplified version of LTM retrieval formatting
-            retrieved_docs = await self._ltm_interface.retrieve(query_text=goal, top_k=2) # Fetch top 2
-            if not retrieved_docs:
+            # Use the proper MCP formatting method
+            mcp_response = await self._ltm_interface.retrieve(query_text=goal, top_k=2) # Fetch top 2
+            if not mcp_response:
                 return "No relevant context found in LTM."
 
-            context_str = ""
-            for i, item in enumerate(retrieved_docs):
-                text = item.get('metadata', {}).get('original_text', 'N/A')
-                context_str += f"{i+1}. {text}\n"
-            return context_str.strip()
+            # Use the proper MCP formatting method
+            return self._ltm_interface.format_context_for_llm(mcp_response)
         except Exception as e:
             logger.error(f"Failed to retrieve LTM context for Architect: {e}")
             return "Error retrieving LTM context."
 
-    async def design_strategy(self, goal: str) -> Optional[str]:
+    async def design_solution(self, complex_goal: str) -> Optional[str]:
         """
-        Generates a high-level strategy for the given goal using the LLM.
+        Generates a high-level solution design for the given complex goal,
+        leveraging cross-agent knowledge from LTM. (Plan 3.3.2)
 
         Args:
-            goal: The complex user goal requiring architectural planning.
+            complex_goal: The complex user goal requiring architectural planning.
 
         Returns:
-            A string containing the strategic plan, or None if generation fails.
+            A string containing the strategic plan/solution design, or None if generation fails.
         """
-        logger.info(f"ArchitectAgent received goal for strategy design: '{goal}'")
+        logger.info(f"ArchitectAgent received complex_goal for solution design: '{complex_goal}'")
 
-        # Prepare context for the prompt
+        agent_experiences_context = "No previous agent experiences found or LTM unavailable."
+        solution_patterns_context = "No known solution patterns found."
+        solution_patterns_list: list[str] = [] # Explicitly type as list of strings
+
+        if self._ltm_interface:
+            try:
+                logger.info(f"Querying LTM for agent experiences related to: 'agent solutions {complex_goal}'")
+                # Query for relevant agent experiences
+                agent_experiences_mcp_results = await self._ltm_interface.retrieve(
+                    f"agent solutions {complex_goal}"
+                )
+
+                if agent_experiences_mcp_results:
+                    # Format the full MCP response for the prompt
+                    if hasattr(self._ltm_interface, 'format_context_for_llm'):
+                        agent_experiences_context = self._ltm_interface.format_context_for_llm(agent_experiences_mcp_results)
+                        logger.info("Formatted agent experiences from LTM.")
+                    else:
+                        logger.warning("LTMInterface does not have 'format_context_for_llm'. Using raw JSON for agent_experiences_context.")
+                        agent_experiences_context = json.dumps(agent_experiences_mcp_results, indent=2)
+                    
+                    logger.debug(f"Agent Experiences Context:\n{agent_experiences_context}")
+
+                    # Leverage graph relationships for solution patterns
+                    graph_results = agent_experiences_mcp_results.get("graph_results")
+                    if graph_results and isinstance(graph_results, list):
+                        for result in graph_results:
+                            if isinstance(result, dict):
+                                properties = result.get("properties", {})
+                                if isinstance(properties, dict): # Ensure properties is a dict
+                                    pattern = properties.get("solution_pattern")
+                                    if pattern and isinstance(pattern, str): # Ensure pattern is a string
+                                        solution_patterns_list.append(pattern)
+                        if solution_patterns_list:
+                            solution_patterns_context = "\n- " + "\n- ".join(solution_patterns_list)
+                            logger.info(f"Extracted solution patterns: {solution_patterns_list}")
+                        else:
+                            logger.info("No 'solution_pattern' found in graph_results properties.")
+                    else:
+                        logger.info("No 'graph_results' in LTM response for solution patterns or not a list.")
+                else:
+                    logger.info("No agent experiences found in LTM for this goal.")
+
+            except Exception as e:
+                logger.error(f"Error retrieving or processing agent experiences from LTM: {e}", exc_info=True)
+        else:
+            logger.warning("LTM interface not available to ArchitectAgent for retrieving agent experiences.")
+
         tool_summary = self._get_tool_registry_summary()
-        ltm_context = await self._get_ltm_context(goal)
 
         prompt = ARCHITECT_PROMPT_TEMPLATE.format(
-            goal=goal,
-            tool_registry_summary=tool_summary,
-            ltm_context=ltm_context
+            complex_goal=complex_goal,
+            agent_experiences_context=agent_experiences_context,
+            solution_patterns_context=solution_patterns_context,
+            tool_registry_summary=tool_summary
         ).strip()
 
-        logger.debug(f"Architect prompt:\n{prompt}")
+        logger.debug(f"Architect prompt (design_solution):\n{prompt}")
 
         # Call LLM
         try:
-            # Assuming LLM client has an async invoke method
             response = await self._llm_client.ainvoke(prompt)
-            strategy = response.content if hasattr(response, 'content') else str(response)
+            solution_design = response.content if hasattr(response, 'content') else str(response)
 
-            if not strategy:
-                 logger.warning("Architect LLM returned an empty strategy.")
+            if not solution_design:
+                 logger.warning("Architect LLM returned an empty solution design.")
                  return None
 
-            logger.info(f"Architect generated strategy for goal '{goal}'.")
-            logger.debug(f"Generated Strategy:\n{strategy}")
-            return strategy
+            logger.info(f"Architect generated solution design for goal '{complex_goal}'.")
+            logger.debug(f"Generated Solution Design:\n{solution_design}")
+            return solution_design
 
         except Exception as e:
-            logger.error(f"Architect LLM call failed for goal '{goal}': {e}", exc_info=True)
+            logger.error(f"Architect LLM call failed for goal '{complex_goal}': {e}", exc_info=True)
             return None
 
 # Example Usage (Conceptual - requires setting up mocks/real components)

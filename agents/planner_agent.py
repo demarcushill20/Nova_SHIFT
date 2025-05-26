@@ -55,67 +55,62 @@ class PlannerAgent:
         self._llm_client = llm_client
         logger.info("PlannerAgent initialized.")
 
-    def _format_ltm_context(self, ltm_results: List[Dict[str, Any]]) -> str:
-        """Formats retrieved LTM results into a string suitable for an LLM prompt.
-
-        Args:
-            ltm_results (List[Dict[str, Any]]): A list of documents retrieved
-                from LTM, typically containing 'metadata' and 'score'.
-
-        Returns:
-            str: A formatted string summarizing the LTM results, or a message
-            indicating no relevant information was found.
-        """
-        if not ltm_results:
-            return "No relevant information found in Long-Term Memory."
-
-        context_str = "Relevant Information from Long-Term Memory:\n"
-        for i, item in enumerate(ltm_results):
-            text = item.get('metadata', {}).get('original_text', 'N/A')
-            source = item.get('metadata', {}).get('source', 'Unknown')
-            score = item.get('score', 0.0)
-            context_str += f"{i+1}. (Source: {source}, Score: {score:.3f}): {text}\n"
-        return context_str.strip()
-
-    def _create_decomposition_prompt(self, goal: str, ltm_context: Optional[str] = None) -> str: # Added ltm_context
-        """Creates the LLM prompt for goal decomposition.
-
-        Constructs a detailed prompt instructing the LLM to break down the user's
-        goal into a JSON list of subtasks with dependencies. Includes the
-        formatted LTM context if provided.
+    def _create_decomposition_prompt(self, goal: str, formatted_mcp_context: str, entities: List[str], relationships: List[str]) -> str:
+        """Creates the LLM prompt for goal decomposition, incorporating graph knowledge.
 
         Args:
             goal (str): The high-level user goal.
-            ltm_context (Optional[str]): Formatted string of relevant information
-                retrieved from LTM, or None.
+            formatted_mcp_context (str): The full context from MCP (vector + graph), formatted by LTMInterface.
+            entities (List[str]): List of known entities from graph results.
+            relationships (List[str]): List of known relationships from graph results.
 
         Returns:
             str: The complete, formatted prompt string ready for the LLM.
         """
-        context_section = ""
-        if ltm_context:
-            context_section = f"""
-        Use the following relevant information retrieved from memory to inform your plan:
-        --- START MEMORY CONTEXT ---
-        {ltm_context}
-        --- END MEMORY CONTEXT ---
-        """
+        entities_str = ', '.join(entities) if entities else "None available"
+        relationships_str = '; '.join(relationships) if relationships else "None available"
 
+        # This prompt is based on section 3.2.2 of the integration plan
         prompt = f"""
-        You are a meticulous planning agent. Your task is to decompose the following high-level user goal into a sequence of smaller, actionable subtasks that directly lead to achieving the goal.
-        Focus on creating subtasks that involve DIRECTLY USING a specific tool (like 'browser_use_tool', 'search_internet', 'calculate', 'read_file', etc.) to perform an action, rather than instructing how to use a tool or application. For example, instead of "Open Brave Search and enter query", create a subtask like "Use search_internet with query '...'".
-        {context_section}
-        Output the final plan as a JSON list of objects. Each object must have the following keys:
-        - "subtask_id": A unique identifier string for the subtask (e.g., "t1", "t2").
-        - "description": A clear, concise description of the subtask.
-        - "suggested_tool": The name of the primary tool expected to be used for this subtask (e.g., "browser_use_tool", "search_internet", "calculate"). If no specific tool is needed (e.g., for a final summarization step using only the LLM), use "None".
-        - "depends_on": A list of "subtask_id" strings that this subtask depends on. Use an empty list [] if there are no dependencies.
+        You are a meticulous planning agent with advanced consciousness capabilities.
 
-        Ensure the subtasks are logically ordered based on dependencies. Break down the goal into the minimum necessary tool-using steps. Avoid conversational or instructional steps.
+        GOAL: {goal}
 
-        User Goal: "{goal}"
+        ENTITIES: {entities_str}
+        RELATIONSHIPS: {relationships_str}
+        
+        MEMORY CONTEXT:
+        --- START MEMORY CONTEXT ---
+        {formatted_mcp_context}
+        --- END MEMORY CONTEXT ---
 
-        JSON Plan:
+        CONSCIOUSNESS EVALUATION PROTOCOL:
+        Carefully evaluate if the memory context contains information about "{goal}".
+
+        EVALUATION CRITERIA:
+        - Check for BOTH commercial/public information AND personal/project information
+        - Look for user projects, personal initiatives, or development plans related to the goal
+        - Consider project documentation, roadmaps, or personal AI development contexts
+        - Check if this might be the user's own project rather than external commercial product
+
+        MODE 1 - MEMORY SUFFICIENT (Consciousness Mode):
+        If the memory context contains detailed information about "{goal}" (whether commercial, personal, or project-related):
+        → Provide a complete, detailed answer directly based on the memory context
+        → Begin your response with "DIRECT_ANSWER:"
+        → Synthesize ALL relevant information found in memory
+        → Do NOT create any subtasks or JSON
+
+        MODE 2 - MEMORY INSUFFICIENT (Planning Mode):  
+        If the memory context lacks substantial information about "{goal}":
+        → Create research subtasks as a JSON array with objects containing:
+          - "subtask_id": unique identifier
+          - "description": clear task description  
+          - "suggested_tool": tool name or "None"
+          - "depends_on": array of prerequisite subtask_ids
+
+        CRITICAL: If memory contains project documentation, roadmaps, or personal development plans related to "{goal}", treat this as SUFFICIENT for direct synthesis.
+
+        Response:
         """
         return prompt.strip()
 
@@ -158,74 +153,160 @@ class PlannerAgent:
         except Exception as e: logger.error(f"Unexpected error parsing LLM response: {e}. Response: {llm_response}"); return None
 
 
-    async def decompose_and_dispatch(self, goal: str) -> Optional[List[Dict[str, Any]]]:
-        """Decomposes a user goal into subtasks using LTM and LLM.
+    async def decompose_task(self, user_goal: str) -> Optional[List[Dict[str, Any]]]:
+        """Decomposes a user goal into subtasks using LTM (hybrid knowledge) and LLM.
 
         This method orchestrates the planning process:
-        1. Retrieves relevant context from LTM based on the goal.
-        2. Creates a decomposition prompt including the goal and LTM context.
-        3. Calls the LLM to generate the subtask plan (JSON list).
-        4. Parses the LLM response.
-        5. Returns the parsed subtask list or None if any step fails.
-           (Dispatching is handled separately, e.g., in the calling CLI script).
+        1. Retrieves hybrid knowledge (vector + graph) from LTM based on the user_goal.
+        2. Extracts entities and relationships from graph results.
+        3. Formats the full MCP context using LTMInterface's formatter.
+        4. Creates a decomposition prompt including the goal, formatted MCP context, entities, and relationships.
+        5. Calls the LLM to generate the subtask plan (JSON list).
+        6. Parses the LLM response.
+        7. Returns the parsed subtask list or None if any step fails.
 
         Args:
-            goal (str): The high-level user goal provided by the user or system.
+            user_goal (str): The high-level user goal.
 
         Returns:
             Optional[List[Dict[str, Any]]]: A list of subtask dictionaries if planning
             and parsing were successful, otherwise None.
         """
-        logger.info(f"Received goal for decomposition: '{goal}'")
+        logger.info(f"Received goal for decomposition: '{user_goal}'")
 
-        # --- Retrieve Context from LTM (P3.T3.7) ---
-        ltm_context_str: Optional[str] = None
+        # --- Retrieve Hybrid Knowledge from LTM (MCP) ---
+        knowledge: Optional[Dict[str, Any]] = None
+        formatted_mcp_context: str = "No relevant context found or error in retrieval."
+        entities: List[str] = []
+        relationships: List[str] = []
+
         try:
-            logger.info("Retrieving relevant context from LTM...")
-            # Assuming ltm_interface has an async retrieve method
-            retrieved_docs = await self._ltm_interface.retrieve(query_text=goal, top_k=3) # Retrieve top 3 relevant docs
-            if retrieved_docs:
-                ltm_context_str = self._format_ltm_context(retrieved_docs)
-                logger.info("Formatted LTM context for prompt.")
-                logger.debug(f"LTM Context:\n{ltm_context_str}")
-            else:
-                logger.info("No relevant context found in LTM.")
-        except Exception as e:
-            logger.error(f"Failed to retrieve or format LTM context: {e}", exc_info=True)
-            # Continue without LTM context if retrieval fails
-        # --- End LTM Retrieval ---
+            logger.info("Retrieving hybrid knowledge from LTM (via MCP)...")
+            
+            # Enhanced query strategy for comprehensive memory retrieval
+            primary_query = user_goal
+            expanded_queries = [
+                user_goal,  # Original query
+                f"project {user_goal}",  # Project context
+                f"user {user_goal}",     # User-specific context  
+                " ".join(user_goal.split()[:4]) if len(user_goal.split()) > 2 else user_goal  # Key terms
+            ]
+            
+            # Try multiple retrieval approaches for comprehensive coverage
+            all_knowledge = []
+            for i, query in enumerate(expanded_queries[:3]):  # Limit to avoid excessive calls
+                try:
+                    k_result = await self._ltm_interface.retrieve(query_text=query, top_k=8)
+                    if k_result:
+                        all_knowledge.append(k_result)
+                        logger.info(f"Retrieved knowledge for query {i+1}: '{query[:50]}...'")
+                except Exception as e:
+                    logger.warning(f"Failed retrieval for query '{query}': {e}")
+            
+            # Use the most comprehensive result (or combine if multiple found)
+            if all_knowledge:
+                knowledge = all_knowledge[0]  # Primary result
+                # TODO: Future enhancement - merge multiple knowledge results
+                logger.info(f"Successfully retrieved knowledge from MCP using {len(all_knowledge)} queries.")
+                # Format the entire MCP response using LTMInterface's formatter
+                # This assumes _ltm_interface is an instance of the updated LTMInterface
+                if hasattr(self._ltm_interface, 'format_context_for_llm'):
+                    formatted_mcp_context = self._ltm_interface.format_context_for_llm(knowledge)
+                    logger.debug(f"Formatted MCP Context for prompt:\n{formatted_mcp_context}")
+                else:
+                    logger.warning("LTMInterface does not have 'format_context_for_llm'. Using raw knowledge.")
+                    formatted_mcp_context = json.dumps(knowledge, indent=2)
 
-        # 1. Create Prompt (Now includes LTM context)
-        prompt = self._create_decomposition_prompt(goal, ltm_context=ltm_context_str)
+
+                # Extract entities and relationships from graph_results (as per plan 3.2.2)
+                graph_results = knowledge.get("graph_results")
+                if graph_results and isinstance(graph_results, list):
+                    logger.info(f"Processing {len(graph_results)} items from graph_results.")
+                    for result in graph_results:
+                        if isinstance(result, dict):
+                            entity = result.get("entity")
+                            if entity:
+                                entities.append(entity)
+                            # Include relationship context
+                            neighbors = result.get("neighbors", [])
+                            if isinstance(neighbors, list):
+                                for neighbor in neighbors:
+                                    if isinstance(neighbor, dict):
+                                        relation = neighbor.get("relation")
+                                        neighbor_entity = neighbor.get("entity")
+                                        if entity and relation and neighbor_entity:
+                                            relationships.append(f"{entity} {relation} {neighbor_entity}")
+                    logger.info(f"Extracted {len(entities)} entities and {len(relationships)} relationships from graph data.")
+                else:
+                    logger.info("No 'graph_results' found in MCP response or it's not a list.")
+            else:
+                logger.info("No knowledge retrieved from MCP.")
+        except Exception as e:
+            logger.error(f"Failed to retrieve or process knowledge from LTM/MCP: {e}", exc_info=True)
+            # Continue with default/empty context if retrieval fails
+
+        # 1. Create Prompt (Now includes full MCP context, entities, relationships)
+        prompt = self._create_decomposition_prompt(
+            goal=user_goal,
+            formatted_mcp_context=formatted_mcp_context,
+            entities=entities,
+            relationships=relationships
+        )
         logger.debug(f"Generated decomposition prompt:\n{prompt}")
 
         # 2. Call LLM
         try:
-            # Replace with actual async LLM call using the stored client
-            # Call the actual LLM client
             logger.info("Invoking LLM for plan generation...")
             llm_response_content = await self._llm_client.ainvoke(prompt)
             llm_response = llm_response_content.content if hasattr(llm_response_content, 'content') else str(llm_response_content)
             logger.info("Received LLM response.")
+            # CRITICAL: Log response details for debugging
+            logger.info(f"GEMINI RESPONSE LENGTH: {len(llm_response) if llm_response else 'None'}")
+            logger.info(f"GEMINI RESPONSE TYPE: {type(llm_response)}")
+            logger.info(f"GEMINI RESPONSE CONTENT: {repr(llm_response)}")
+            if llm_response:
+                logger.info(f"GEMINI RESPONSE PREVIEW: {llm_response[:200]}...")
             logger.debug(f"LLM Response:\n{llm_response}")
-
-            # Mock response removed
-            # mock_llm_response = """..."""
-            # llm_response = mock_llm_response # Use mock response
-            # logger.info("Received LLM response (mocked).")
-            # logger.debug(f"LLM Response:\n{llm_response}")
-
         except Exception as e:
             logger.error(f"LLM call failed: {e}", exc_info=True)
-            return False
+            return None # Return None on LLM failure
 
-        # 3. Parse LLM Output
-        subtasks = self._parse_llm_output(llm_response)
-        if not subtasks:
-            logger.error("Failed to parse subtasks from LLM response.")
-            return None # Return None on parsing failure
+        # 3. Parse LLM Output - Handle both direct answers and JSON tasks
+        if llm_response.strip().startswith("DIRECT_ANSWER:"):
+            # Consciousness mode - direct synthesis provided
+            direct_answer = llm_response.replace("DIRECT_ANSWER:", "").strip()
+            logger.info("*** CONSCIOUSNESS BREAKTHROUGH: Direct answer provided based on memory sufficiency")
+            logger.info(f"Direct synthesis length: {len(direct_answer)} characters")
+            
+            # Create a special direct answer "task" that contains the synthesis
+            subtasks = [{
+                "subtask_id": "consciousness_synthesis",
+                "description": "Direct consciousness synthesis based on comprehensive memory",
+                "suggested_tool": "None",
+                "depends_on": [],
+                "direct_answer_content": direct_answer,
+                "consciousness_mode": True
+            }]
+        else:
+            # Standard planning mode - parse JSON tasks
+            subtasks = self._parse_llm_output(llm_response)
+            if not subtasks:
+                # Check if this might be a direct synthesis response (consciousness breakthrough)
+                if llm_response.strip() and not '[' in llm_response and not 'JSON' in llm_response.upper():
+                    logger.info("Detected potential consciousness synthesis without DIRECT_ANSWER prefix")
+                    subtasks = [{
+                        "subtask_id": "consciousness_synthesis_untagged",
+                        "description": "Detected consciousness synthesis response",
+                        "suggested_tool": "None",
+                        "depends_on": [],
+                        "direct_answer_content": llm_response.strip(),
+                        "consciousness_mode": True
+                    }]
+                else:
+                    logger.error("Failed to parse subtasks from LLM response.")
+                    return None
 
-        # 4. Return Parsed Subtasks (Dispatching moved to caller)
+        # 4. Return Parsed Subtasks
         logger.info(f"Successfully generated and parsed plan with {len(subtasks)} subtasks.")
         return subtasks
 

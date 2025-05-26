@@ -20,7 +20,7 @@ from dotenv import load_dotenv # Added import
 load_dotenv()
 
 # LangChain components
-from langchain_google_genai import ChatGoogleGenerativeAI # Changed import
+from langchain_openai import ChatOpenAI # Temporarily switch to OpenAI
 from langchain.agents import AgentExecutor
 from langchain.agents import create_tool_calling_agent # Changed import
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-LLM_MODEL_NAME = "gemini-2.5-pro-preview-03-25" # Changed model name
+LLM_MODEL_NAME = "gpt-4o" # Temporarily switch to OpenAI
 MEMORY_KEY = "chat_history"
 AGENT_PROMPT_TEMPLATE = """You are a helpful assistant agent within the Nova SHIFT system.
 Your Agent ID is: {agent_id}
@@ -60,10 +60,18 @@ You have access to the following tools:
 {tools}
 
 Use the tools to accomplish the task description.
-Consider the following potentially relevant context retrieved from memory:
---- START MEMORY CONTEXT ---
+
+--- START IRIS IDENTITY CONTEXT ---
+{iris_identity_context}
+--- END IRIS IDENTITY CONTEXT ---
+
+CRITICAL: You have access to a comprehensive shared memory system containing detailed information about ongoing projects, past conversations, and important context. ALWAYS prioritize information from this memory system over internet search results when it contains relevant information.
+
+--- START UNIFIED MEMORY CONTEXT ---
 {memory_context}
---- END MEMORY CONTEXT ---
+--- END UNIFIED MEMORY CONTEXT ---
+
+IMPORTANT: If the memory context above contains information relevant to the task, use that information as your primary source. Only use internet search tools if the memory context lacks the specific information needed.
 
 You have access to a chat history relevant to this task thread:
 {chat_history}
@@ -72,7 +80,7 @@ Input for this step: {input}
 
 Thought Process:
 {agent_scratchpad}
-""" # Added memory_context placeholder
+"""
 
 # --- Tool Loading and Mapping ---
 # Map tool function names to the synchronous functions
@@ -283,85 +291,77 @@ class SpecialistAgent:
         # Defer AgentExecutor creation to an async method or first use.
         logger.info(f"Specialist Agent '{self.agent_id}' initialized with {len(self.tools)} initial tools: {[t.name for t in self.tools]}")
 
-    async def _create_agent_executor(self) -> Optional[AgentExecutor]: # Made async
+    async def _create_agent_executor(self, iris_identity_context: str) -> Optional[AgentExecutor]:
         """Creates or recreates the LangChain AgentExecutor.
 
         Builds the agent executor using the currently loaded `self.tools`. It fetches
         tool scores from shared memory, formats them into the tool descriptions,
-        and constructs the system prompt. Includes the LLM tracking callback.
+        and constructs the system prompt including Iris identity context.
+        Includes the LLM tracking callback.
+
+        Args:
+            iris_identity_context (str): The formatted Iris identity context.
 
         Returns:
             Optional[AgentExecutor]: The configured AgentExecutor instance, or None
             if no tools are loaded or creation fails.
         """
-        # Use agent_id in log messages within the class
         agent_log_prefix = f"[{self.agent_id}]"
         if not self.tools:
             logger.warning(f"{agent_log_prefix} No tools available, cannot create agent executor.")
             return None
 
-        # Fetch scores and format descriptions (P4.T1.3)
         tool_desc_parts = []
         for tool in self.tools:
-            # Fetch score using the added method in SharedMemoryInterface
-            # Provide a default score (e.g., 0.5) if none is found
             score_val = await self.shared_memory.read_score(tool.name, default_score=0.5)
-            # Explicitly cast to float before formatting
             try:
-                score = float(score_val) # Cast the awaited result
+                score = float(score_val)
                 score_str = f"{score:.2f}"
             except (ValueError, TypeError):
-                score_str = str(score_val) # Fallback if casting fails
+                score_str = str(score_val)
             desc_with_score = f"- {tool.name} (Score: {score_str}): {tool.description}"
-            logger.debug(f"{agent_log_prefix} Formatted tool description: {desc_with_score}") # DEBUG LOG
             tool_desc_parts.append(desc_with_score)
-
         tool_descriptions = "\n".join(tool_desc_parts)
         logger.debug(f"{agent_log_prefix} Formatted tool descriptions with scores:\n{tool_descriptions}")
 
-        # The prompt template now includes {memory_context} which needs to be provided during invoke
-        # Format the system prompt directly using an f-string or .format()
-        # This avoids potential issues with how .replace() interacts with mocking/template handling
-        system_prompt_content = AGENT_PROMPT_TEMPLATE.format(
-            agent_id=self.agent_id, # Assuming agent_id is needed here based on template
-            subtask_id="{subtask_id}", # Keep placeholders for runtime variables
-            subtask_description="{subtask_description}",
-            tools=tool_descriptions, # Inject the formatted tool descriptions
-            memory_context="{memory_context}",
-            chat_history="{chat_history}",
-            input="{input}",
-            agent_scratchpad="{agent_scratchpad}"
-        )
-        # We need to ensure AGENT_PROMPT_TEMPLATE actually uses .format() style placeholders
-        # Let's assume it does for now, or adjust the template if needed.
-        # If AGENT_PROMPT_TEMPLATE uses f-string style, this needs adjustment.
-        # Reading the template again shows it uses f-string style {variable}.
-        # Let's use f-string formatting instead.
+        # Format the system prompt using .format() for all placeholders
+        # AGENT_PROMPT_TEMPLATE expects: agent_id, subtask_id, subtask_description, tools,
+        # iris_identity_context, memory_context, chat_history, input, agent_scratchpad
+        # Some of these are filled at runtime by Langchain (subtask_id, subtask_description, memory_context, chat_history, input, agent_scratchpad)
+        # We pre-fill tools and iris_identity_context here.
+        
+        # Create a dictionary with variables known at this stage for the template
+        # The actual AGENT_PROMPT_TEMPLATE string will be passed to ChatPromptTemplate,
+        # and Langchain will fill the remaining placeholders at runtime.
+        # Here, we are effectively creating a partially formatted system message string.
+        
+        # The AGENT_PROMPT_TEMPLATE is a single string.
+        # We need to replace placeholders that _create_agent_executor is responsible for.
+        # The `formatted_input` in `execute_task` handles runtime variables.
+        
+        # Let's replace the known parts directly in the template string.
+        # This is a bit manual but ensures the placeholders are correctly handled before Langchain sees it.
+        
+        temp_prompt = AGENT_PROMPT_TEMPLATE.replace("{tools}", tool_descriptions)
+        temp_prompt = temp_prompt.replace("{iris_identity_context}", iris_identity_context)
+        temp_prompt = temp_prompt.replace("{agent_id}", self.agent_id)
 
-        # Re-read template: It uses {variable} style, suitable for .format() or direct f-string if variables are local.
-        # Using .format() is safer here. We need all expected keys.
-        # The original template has {agent_id}, {subtask_id}, {subtask_description}, {tools}, {memory_context}, {chat_history}, {input}, {agent_scratchpad}
+        # Add memory-aware instruction
+        memory_instruction = """
+MEMORY-FIRST PRINCIPLE: Before using any tools, carefully analyze if the UNIFIED MEMORY CONTEXT above contains sufficient information to answer the task. If the memory contains detailed, specific information that fully addresses the task, provide your response based on that memory without using tools. Only use tools if the memory lacks critical details needed to complete the task.
+        """
+        temp_prompt = temp_prompt.replace("Use the tools to accomplish the task description.", 
+                                        f"Use the tools to accomplish the task description.{memory_instruction}")
 
-        # Let's stick to the original approach but ensure the variable passed is correct.
-        # The previous log showed formatted_system_prompt was correct.
-        # The issue might be how the test mock interacts with ChatPromptTemplate.from_messages.
+        formatted_system_prompt = temp_prompt # This is the system message string
 
-        # Alternative: Pass the template and variables separately if LangChain supports it?
-        # Let's try passing the original template and providing 'tools' as a partial variable.
-
-        # Reverting to the previous approach as the variable seemed correct in logs.
-        # The test extraction logic might be the issue.
-        formatted_system_prompt = AGENT_PROMPT_TEMPLATE.replace("{tools}", tool_descriptions)
-        logger.debug(f"{agent_log_prefix} AGENT_PROMPT_TEMPLATE before replace:\n{AGENT_PROMPT_TEMPLATE}") # DEBUG LOG
-        logger.debug(f"{agent_log_prefix} tool_descriptions:\n{tool_descriptions}") # DEBUG LOG
-        logger.debug(f"{agent_log_prefix} formatted_system_prompt after replace:\n{formatted_system_prompt}") # DEBUG LOG - Renamed variable
+        logger.debug(f"{agent_log_prefix} System prompt for AgentExecutor:\n{formatted_system_prompt}")
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", formatted_system_prompt), # Pass the explicitly formatted string
+            ("system", formatted_system_prompt),
             MessagesPlaceholder(variable_name=MEMORY_KEY), # Handles chat_history
-            # Input now needs to be structured to contain 'input' and 'memory_context'
             ("human", "{input}"), # The primary input query/instruction
-            MessagesPlaceholder(variable_name="agent_scratchpad"), # Re-added placeholder
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
 
         try:
@@ -387,25 +387,54 @@ class SpecialistAgent:
             logger.error(f"{agent_log_prefix} Failed to create Agent Executor: {e}", exc_info=True)
             return None
 
-    def _format_ltm_context(self, ltm_results: List[Dict[str, Any]]) -> str:
-        """Formats retrieved LTM results into a string suitable for the LLM prompt.
-
+    async def _evaluate_memory_sufficiency(self, query: str, memory_context: str) -> tuple[bool, str]:
+        """Evaluates if the retrieved memory context sufficiently answers the query.
+        
+        Uses LLM to determine if the memory contains enough information to answer
+        the query without needing additional research.
+        
         Args:
-            ltm_results (List[Dict[str, Any]]): List of documents from LTM search.
-
+            query (str): The original query/task description
+            memory_context (str): Formatted memory context from LTM
+            
         Returns:
-            str: A formatted string summarizing LTM results, or a default message.
+            tuple[bool, str]: (is_sufficient, explanation)
         """
-        # (Copied from PlannerAgent - consider moving to a shared utility)
-        if not ltm_results:
-            return "No relevant information found in Long-Term Memory."
-        context_str = ""
-        for i, item in enumerate(ltm_results):
-            text = item.get('metadata', {}).get('original_text', 'N/A')
-            source = item.get('metadata', {}).get('source', 'Unknown')
-            score = item.get('score', 0.0)
-            context_str += f"{i+1}. (Source: {source}, Score: {score:.3f}): {text}\n"
-        return context_str.strip()
+        if not memory_context or "No relevant" in memory_context or len(memory_context.strip()) < 50:
+            return False, "Memory context is empty or minimal"
+            
+        evaluation_prompt = f"""You are an expert evaluator determining if retrieved memory context sufficiently answers a query.
+
+QUERY: "{query}"
+
+MEMORY CONTEXT:
+{memory_context}
+
+EVALUATION CRITERIA:
+1. Does the memory context contain specific, detailed information directly relevant to the query?
+2. Is the information comprehensive enough to provide a complete answer?
+3. Does the context address the specific project, person, or topic mentioned in the query?
+
+IMPORTANT: If the query asks about "Nova AI tool for freedom" or "Nova AI Road to Freedom" and the memory contains detailed information about a specific Nova AI development project, that IS sufficient - don't require internet research for generic "Nova AI" information.
+
+Respond with ONLY:
+SUFFICIENT: [Yes/No]
+REASON: [Brief explanation]"""
+
+        try:
+            response = await self.llm.ainvoke(evaluation_prompt.strip())
+            response_text = response.content if hasattr(response, 'content') else str(response)
+            
+            # Parse response
+            is_sufficient = "SUFFICIENT: Yes" in response_text
+            reason_start = response_text.find("REASON: ")
+            reason = response_text[reason_start + 8:].strip() if reason_start != -1 else "No reason provided"
+            
+            return is_sufficient, reason
+            
+        except Exception as e:
+            logger.error(f"Error evaluating memory sufficiency: {e}")
+            return False, f"Evaluation failed: {e}"
 
     async def _analyze_tool_requirements(self, subtask_description: str) -> List[str]:
         """Analyzes subtask description to identify required tools using an LLM call.
@@ -540,10 +569,9 @@ class SpecialistAgent:
         if load_failed: logger.error(f"{agent_log_prefix} Failed dynamic load."); return False
         self.tools.extend(newly_loaded_tools)
         logger.info(f"{agent_log_prefix} Added {len(newly_loaded_tools)} tools. Current count: {len(self.tools)}")
-        logger.info(f"{agent_log_prefix} Recreating agent executor asynchronously...")
-        # Need to await the creation now
-        self.agent_executor = await self._create_agent_executor()
-        if self.agent_executor is None: logger.error(f"{agent_log_prefix} Failed recreate agent executor."); return False
+        logger.info(f"{agent_log_prefix} Tools loaded. Agent executor will be (re)created in execute_task if necessary.")
+        # self.agent_executor = await self._create_agent_executor() # Executor creation moved to execute_task
+        # if self.agent_executor is None: logger.error(f"{agent_log_prefix} Failed recreate agent executor."); return False
         return True
 
 
@@ -687,18 +715,6 @@ class SpecialistAgent:
             await self.shared_memory.write(status_key, "running")
             logger.info(f"{agent_task_log_prefix} Set status to 'running'")
 
-            # --- Task-Tool Requirement Analysis ---
-            required_tool_names_for_logging = await self._analyze_tool_requirements(subtask_description)
-            logger.info(f"{agent_task_log_prefix} Identified required tools: {required_tool_names_for_logging}")
-
-            # --- Dynamic Tool Loading ---
-            if required_tool_names_for_logging:
-                tools_loaded_ok = await self._ensure_tools_loaded(required_tool_names_for_logging)
-                if not tools_loaded_ok:
-                    error_message = f"Failed to load required tools: {required_tool_names_for_logging}"
-                    logger.error(f"{agent_task_log_prefix} {error_message}")
-                    raise Exception(error_message)
-
             # --- Check Dependencies ---
             dependency_results = await self._check_dependencies(dependencies)
             if dependency_results is None:
@@ -710,54 +726,132 @@ class SpecialistAgent:
             ltm_context_str = "No relevant context found in LTM." # Default
             try:
                 logger.info(f"{agent_task_log_prefix} Retrieving LTM context")
-                retrieved_docs = await self.ltm_interface.retrieve(query_text=subtask_description, top_k=3)
-                if retrieved_docs:
-                    ltm_context_str = self._format_ltm_context(retrieved_docs)
-                    logger.info(f"{agent_task_log_prefix} Retrieved {len(retrieved_docs)} docs from LTM.")
+                retrieved_mcp_response = await self.ltm_interface.retrieve(query_text=subtask_description, top_k=3)
+                if retrieved_mcp_response:
+                    # Use the proper MCP formatting method instead of manual formatting
+                    ltm_context_str = self.ltm_interface.format_context_for_llm(retrieved_mcp_response)
+                    logger.info(f"{agent_task_log_prefix} Retrieved and formatted LTM context from MCP.")
                     logger.debug(f"{agent_task_log_prefix} LTM Context for prompt:\n{ltm_context_str}")
             except Exception as ltm_err:
                  logger.error(f"{agent_task_log_prefix} Failed to retrieve LTM context: {ltm_err}", exc_info=True)
                  # Continue without LTM context on error
             # --- End LTM Retrieval ---
 
-            # --- Prepare Agent Input ---
-            # Combine subtask description, dependency results, and LTM context
+            # --- Memory Sufficiency Evaluation (NEW) ---
+            memory_is_sufficient = False  # Default value
+            memory_sufficiency_reason = "Not evaluated"  # Default value
+            
+            try:
+                logger.info(f"{agent_task_log_prefix} Evaluating memory sufficiency for task")
+                memory_is_sufficient, memory_sufficiency_reason = await self._evaluate_memory_sufficiency(
+                    subtask_description, ltm_context_str
+                )
+                logger.info(f"{agent_task_log_prefix} Memory sufficiency: {memory_is_sufficient} - {memory_sufficiency_reason}")
+            except Exception as eval_err:
+                logger.error(f"{agent_task_log_prefix} Memory sufficiency evaluation failed: {eval_err}", exc_info=True)
+                memory_is_sufficient = False  # Ensure it's set to False on error
+                memory_sufficiency_reason = f"Evaluation failed: {eval_err}"
+            # --- End Memory Sufficiency Evaluation ---
+
+            # --- Task-Tool Requirement Analysis (Conditional) ---
+            if memory_is_sufficient:
+                logger.info(f"{agent_task_log_prefix} Memory contains sufficient information. Skipping tool requirement analysis.")
+                # We'll use a memory-only response approach
+            else:
+                logger.info(f"{agent_task_log_prefix} Memory insufficient. Proceeding with tool requirement analysis.")
+                required_tool_names_for_logging = await self._analyze_tool_requirements(subtask_description)
+                logger.info(f"{agent_task_log_prefix} Identified required tools: {required_tool_names_for_logging}")
+
+                # --- Dynamic Tool Loading ---
+                if required_tool_names_for_logging:
+                    tools_loaded_ok = await self._ensure_tools_loaded(required_tool_names_for_logging)
+                    if not tools_loaded_ok:
+                        error_message = f"Failed to load required tools: {required_tool_names_for_logging}"
+                        logger.error(f"{agent_task_log_prefix} {error_message}")
+                        raise Exception(error_message)
+
+            # --- Retrieve Iris Identity Context (Phase 2.1) ---
+            iris_context_str = "No Iris identity context found or error in retrieval." # Default
+            try:
+                logger.info(f"{agent_task_log_prefix} Retrieving Iris identity context from LTM.")
+                # The plan specifies "Iris identity relationship context" as the query
+                iris_mcp_response = await self.ltm_interface.retrieve("Iris identity relationship context")
+                if iris_mcp_response:
+                    # Use the format_context_for_llm method from ltm_interface
+                    iris_context_str = self.ltm_interface.format_context_for_llm(iris_mcp_response)
+                    logger.info(f"{agent_task_log_prefix} Successfully retrieved and formatted Iris identity context.")
+                    logger.debug(f"{agent_task_log_prefix} Iris Identity Context for prompt:\n{iris_context_str}")
+                else:
+                    logger.warning(f"{agent_task_log_prefix} No results returned from LTM for Iris identity context query.")
+            except Exception as iris_err:
+                logger.error(f"{agent_task_log_prefix} Failed to retrieve or format Iris identity context: {iris_err}", exc_info=True)
+            # --- End Iris Identity Context Retrieval ---
+
+            # --- Execute Task (Memory-Aware Approach) ---
             agent_input_parts = [subtask_description]
             if dependency_results:
                  dep_context = "\n\n[Context from completed prerequisite tasks]:\n" + json.dumps(dependency_results, indent=2)
                  agent_input_parts.append(dep_context)
-            # LTM context is now handled by the prompt template directly via 'memory_context' variable
 
             agent_input_combined = "\n".join(agent_input_parts)
 
-            # --- Execute Task ---
-            # Ensure the agent executor is created/updated with current tools and context
-            self.agent_executor = await self._create_agent_executor()
-            if not self.agent_executor:
-                 error_message = "Agent executor could not be created." # Updated error message
-                 logger.error(f"{agent_task_log_prefix} {error_message}")
-                 raise Exception(error_message)
+            if memory_is_sufficient:
+                # Memory-only execution path
+                logger.info(f"{agent_task_log_prefix} Executing memory-only response (no tools needed)")
+                
+                # Create a simplified prompt for memory-based response
+                memory_response_prompt = f"""Based on the comprehensive information available in memory, provide a complete answer to this task:
 
-            logger.info(f"{agent_task_log_prefix} Invoking agent executor...") # Keep as is
-            # Pass necessary context to the prompt template
-            formatted_input = {
-                "input": agent_input_combined, # Main instruction + dependency context
-                "agent_id": self.agent_id,
-                "subtask_id": subtask_id,
-                "subtask_description": subtask_description,
-                "memory_context": ltm_context_str # Pass LTM context here
-                # Removed chat_history and agent_scratchpad placeholders
-            }
-            response = await self.agent_executor.ainvoke(formatted_input)
-            output = response.get("output")
+TASK: {subtask_description}
 
-            if output is not None:
-                logger.info(f"{agent_task_log_prefix} Execution successful.") # Keep as is
-                final_status = "completed"
-            else:
-                error_message = "Agent execution finished but produced no output."
-                logger.error(f"{agent_task_log_prefix} Failed: {error_message}") # Keep as is
-                final_status = "failed"
+MEMORY CONTEXT:
+{ltm_context_str}
+
+IRIS IDENTITY CONTEXT:
+{iris_context_str}
+
+Please provide a detailed response using the information from memory. Do not mention that you're using memory or suggest additional research unless the memory truly lacks specific details needed."""
+
+                try:
+                    response = await self.llm.ainvoke(memory_response_prompt)
+                    output = response.content if hasattr(response, 'content') else str(response)
+                    logger.info(f"{agent_task_log_prefix} Memory-based execution successful.")
+                    final_status = "completed"
+                except Exception as e:
+                    logger.error(f"{agent_task_log_prefix} Memory-based execution failed: {e}")
+                    # Fall back to tool-based approach
+                    memory_is_sufficient = False
+                    logger.info(f"{agent_task_log_prefix} Falling back to tool-based execution")
+
+            if not memory_is_sufficient:
+                # Tool-based execution path (original logic)
+                logger.info(f"{agent_task_log_prefix} Executing tool-based response")
+                
+                # Ensure the agent executor is created/updated with current tools and ALL context
+                self.agent_executor = await self._create_agent_executor(iris_identity_context=iris_context_str)
+                if not self.agent_executor:
+                     error_message = "Agent executor could not be created with all contexts."
+                     logger.error(f"{agent_task_log_prefix} {error_message}")
+                     raise Exception(error_message)
+
+                logger.info(f"{agent_task_log_prefix} Invoking agent executor...")
+                # Pass necessary runtime context to the prompt template via ainvoke
+                formatted_input = {
+                    "input": agent_input_combined, # Main instruction + dependency context
+                    "subtask_id": subtask_id, 
+                    "subtask_description": subtask_description, 
+                    "memory_context": ltm_context_str 
+                }
+                response = await self.agent_executor.ainvoke(formatted_input)
+                output = response.get("output")
+
+                if output is not None:
+                    logger.info(f"{agent_task_log_prefix} Tool-based execution successful.")
+                    final_status = "completed"
+                else:
+                    error_message = "Agent execution finished but produced no output."
+                    logger.error(f"{agent_task_log_prefix} Failed: {error_message}")
+                    final_status = "failed"
 
         except Exception as e:
             logger.error(f"{agent_task_log_prefix} Error during execution: {e}", exc_info=True) # Keep as is
@@ -786,10 +880,14 @@ class SpecialistAgent:
 
             # --- Log Overall Task and LLM Stats ---
             llm_stats = self.llm_callback_handler.get_stats() # Get stats from the handler
+            execution_method = "memory_only" if memory_is_sufficient else "tool_based"
             final_log_data = {
                 'task_id': subtask_id,
                 'agent_id': self.agent_id,
                 'final_status': final_status,
+                'execution_method': execution_method,
+                'memory_sufficient': memory_is_sufficient,
+                'memory_sufficiency_reason': memory_sufficiency_reason,
                 'duration_ms': round(duration * 1000, 2),
                 'llm_calls': llm_stats.get('total_llm_calls', 0),
                 'total_tokens': llm_stats.get('total_tokens', 0),
@@ -820,7 +918,7 @@ class SpecialistAgent:
                 ltm_doc_id = f"result_{subtask_id}_{self.agent_id}" # Simple ID scheme
                 try:
                     output_text = str(output)
-                    await self.ltm_interface.store(text=output_text, metadata=store_metadata, doc_id=ltm_doc_id)
+                    await self.ltm_interface.store(text=output_text, metadata=store_metadata)
                     logger.info(f"{agent_task_log_prefix} Stored result to LTM (ID: {ltm_doc_id}).")
                 except Exception as store_err:
                     logger.error(f"{agent_task_log_prefix} Failed to store result to LTM: {store_err}", exc_info=True)
@@ -887,17 +985,17 @@ def initialize_specialist_agent_instance(
     logger.info(f"Initializing Specialist Agent instance: {agent_id}...")
     # initial_tools: List[LangchainTool] = create_langchain_tools(registry) # Removed: Agent __init__ handles initial tool loading
     try:
-        # Check for GOOGLE_API_KEY as it's now the primary requirement
-        google_api_key = os.environ.get("GOOGLE_API_KEY")
-        if not google_api_key:
-             logger.error("GOOGLE_API_KEY environment variable not set.")
+        # Check for OPENAI_API_KEY as it's now the primary requirement
+        openai_api_key = os.environ.get("OPENAI_API_KEY")
+        if not openai_api_key:
+             logger.error("OPENAI_API_KEY environment variable not set.")
              return None
         if llm is None:
-             # Initialize default LLM as ChatGoogleGenerativeAI
-             llm = ChatGoogleGenerativeAI(
+             # Initialize default LLM as ChatOpenAI
+             llm = ChatOpenAI(
                  model=LLM_MODEL_NAME,
                  temperature=0,
-                 google_api_key=google_api_key # Pass the key
+                 api_key=openai_api_key
              )
              logger.info(f"[{agent_id}] Initialized default LLM: {LLM_MODEL_NAME}")
         else:

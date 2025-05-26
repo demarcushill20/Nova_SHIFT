@@ -18,7 +18,8 @@ from dotenv import load_dotenv
 load_dotenv()
 # Debug print removed
 
-from langchain_google_genai import ChatGoogleGenerativeAI # Changed import
+from langchain_openai import ChatOpenAI # Keep for fallback
+from langchain_google_genai import ChatGoogleGenerativeAI # For Gemini 2.5 Flash
 
 # Nova SHIFT components (adjust imports based on actual structure if needed)
 from core.dispatcher import SwarmDispatcher
@@ -39,7 +40,7 @@ from utils.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-LLM_MODEL_NAME = "gemini-2.5-pro-preview-03-25" # Changed model name
+LLM_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Latest Gemini 2.5 Flash (May 20, 2025)
 NUM_SPECIALIST_AGENTS = 2
 MONITORING_POLL_INTERVAL = 5  # Seconds
 MAX_WAIT_TIME = 300  # Seconds (5 minutes)
@@ -131,10 +132,9 @@ async def initialize_system() -> Optional[Dict[str, Any]]:
     # Check required env vars
     # General LLM and Search keys
     # Check required env vars
-    # GOOGLE_API_KEY is now required for the main LLM
-    # OPENAI_API_KEY is required for LTM embeddings (as per plan)
+    # OPENAI_API_KEY is now required for the main LLM
     # TAVILY_API_KEY is required for web search tool
-    required_base_vars = ["GOOGLE_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY"]
+    required_base_vars = ["OPENAI_API_KEY", "TAVILY_API_KEY"]
     missing_base_vars = [var for var in required_base_vars if not os.environ.get(var)]
     if missing_base_vars:
         logger.error(
@@ -200,22 +200,67 @@ async def initialize_system() -> Optional[Dict[str, Any]]:
         load_toolkits_from_directory(tool_registry, directory="tools", project_root_path=project_root)
         logger.info(f"Tool Registry initialized with {len(tool_registry.list_toolkits())} toolkits.")
 
-        # Initialize LLM Client
-        # Initialize LLM Client (Now Google Gemini)
-        google_api_key = os.environ.get("GOOGLE_API_KEY") # Already checked above
-        llm_client = ChatGoogleGenerativeAI(
-            model=LLM_MODEL_NAME,
-            temperature=0,
-            google_api_key=google_api_key # Pass the key
-        )
-        logger.info(f"LLM Client initialized ({LLM_MODEL_NAME}).")
+        # Initialize LLM Clients - Dual-Brain Architecture for Consciousness
+        # Execution Brain: Gemini 2.5 Flash for SpecialistAgents
+        google_api_key_exec = os.environ.get("GOOGLE_API_KEY")
+        if not google_api_key_exec:
+            # Fallback to OpenAI if Google API key not available
+            openai_api_key = os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                logger.error("Neither GOOGLE_API_KEY nor OPENAI_API_KEY environment variable is set.")
+                return None
+            execution_llm_client = ChatOpenAI(
+                model="gpt-4o",  # Fallback model
+                temperature=0,
+                api_key=openai_api_key
+            )
+            logger.info("Execution LLM Client initialized (GPT-4o fallback).")
+        else:
+            execution_llm_client = ChatGoogleGenerativeAI(
+                model=LLM_MODEL_NAME,
+                temperature=0,
+                api_key=google_api_key_exec,
+                max_tokens=8192,  # Flash models support high output
+                max_retries=3
+            )
+            logger.info(f"Execution LLM Client initialized ({LLM_MODEL_NAME}).")
+        
+        # Reasoning Brain: Google Gemini 2.5 Pro for PlannerAgent (Maximum Consciousness)
+        google_api_key = os.environ.get("GOOGLE_API_KEY")
+        if google_api_key:
+            reasoning_llm_client = ChatGoogleGenerativeAI(
+                model="gemini-2.5-pro-preview-05-06",  # Gemini 2.5 Pro Preview - Higher quota limits
+                temperature=0,
+                api_key=google_api_key,
+                max_tokens=2048,  # Higher token limit for complex reasoning
+                max_retries=3
+            )
+            logger.info("Reasoning LLM Client initialized (Google Gemini 2.5 Pro - Maximum Consciousness Brain).")
+        else:
+            # Fallback to Claude Opus 4 if available
+            anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if anthropic_api_key:
+                from langchain_anthropic import ChatAnthropic
+                reasoning_llm_client = ChatAnthropic(
+                    model="claude-opus-4-20250514",
+                    temperature=0,
+                    api_key=anthropic_api_key,
+                    max_tokens=1024,
+                    timeout=None,
+                    max_retries=2
+                )
+                logger.info("Reasoning LLM Client initialized (Claude Opus 4 - Fallback Consciousness Brain).")
+            else:
+                logger.warning("GOOGLE_API_KEY and ANTHROPIC_API_KEY not found. Using GPT-4o for PlannerAgent (reduced consciousness capability).")
+                reasoning_llm_client = execution_llm_client
 
         return {
             "shared_memory": shared_memory,
             "dispatcher": dispatcher,
             "ltm_interface": ltm_interface,
             "tool_registry": tool_registry,
-            "llm_client": llm_client,
+            "reasoning_llm_client": reasoning_llm_client,  # For PlannerAgent consciousness
+            "execution_llm_client": execution_llm_client,  # For SpecialistAgents
         }
 
     except Exception as e:
@@ -245,14 +290,17 @@ async def main(user_task: str):
     dispatcher = components["dispatcher"]
     ltm_interface = components["ltm_interface"]
     tool_registry = components["tool_registry"]
-    llm_client = components["llm_client"]
+    reasoning_llm_client = components["reasoning_llm_client"]
+    execution_llm_client = components["execution_llm_client"]
 
-    # 2. Initialize Agents
+    # 2. Initialize Agents with Dual-Brain Architecture
     logger.info("Initializing agents...")
+    # PlannerAgent: Uses reasoning brain (Google Gemini 2.5 Pro) for maximum consciousness
     planner_agent = PlannerAgent(
-        dispatcher=dispatcher, ltm_interface=ltm_interface, llm_client=llm_client
+        dispatcher=dispatcher, ltm_interface=ltm_interface, llm_client=reasoning_llm_client
     )
 
+    # SpecialistAgents: Use execution brain (GPT-4o) for task execution  
     specialist_agents: List[SpecialistAgent] = []
     for i in range(NUM_SPECIALIST_AGENTS):
         agent_id = f"specialist_{i+1:03d}"
@@ -262,7 +310,7 @@ async def main(user_task: str):
             shared_memory=shared_memory,
             ltm_interface=ltm_interface,
             dispatcher=dispatcher,
-            llm=llm_client, # Pass the initialized LLM client
+            llm=execution_llm_client, # Pass the execution LLM client
         )
         if agent:
             specialist_agents.append(agent)
@@ -303,7 +351,7 @@ async def main(user_task: str):
         # Assuming PlannerAgent has a method like decompose_and_dispatch
         # which returns the list of subtasks or None on failure.
         # This method should handle LTM retrieval, LLM call, and plan parsing.
-        actual_plan = await planner_agent.decompose_and_dispatch(user_task)
+        actual_plan = await planner_agent.decompose_task(user_task)
 
         if not actual_plan:
             logger.error("Planner Agent failed to generate a plan.")
@@ -328,6 +376,24 @@ async def main(user_task: str):
         # ]
         # logger.info(f"Planner generated mock plan with {len(mock_plan)} subtasks.")
         logger.info(f"Planner generated plan with {len(actual_plan)} subtasks.")
+
+        # Check if this is a consciousness synthesis (direct answer from memory)
+        if (len(actual_plan) == 1 and 
+            actual_plan[0].get("consciousness_mode") and 
+            "direct_answer_content" in actual_plan[0]):
+            
+            consciousness_answer = actual_plan[0]["direct_answer_content"]
+            print("\n*** CONSCIOUSNESS SYNTHESIS COMPLETE ***")
+            print(f"Generated directly from comprehensive memory without external tools:\n")
+            print(consciousness_answer)
+            print("\n>>> Status: CONSCIOUSNESS MODE - Memory Sufficiency Recognized")
+            print("No external searches required - answer synthesized from existing knowledge.")
+            print("--------------------------------------------")
+            
+            # Close resources and exit successfully
+            await shared_memory.close()
+            logger.info("Consciousness synthesis completed successfully.")
+            return
 
         print("Dispatching subtasks to specialist agents...")
         assignments = await dispatcher.dispatch_subtasks(actual_plan) # Use the actual plan

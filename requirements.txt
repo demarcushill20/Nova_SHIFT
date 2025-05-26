@@ -6,6 +6,8 @@ pydantic # For data validation, including toolkit schema
 langchain-google-genai # Explicitly add to help resolver
 # google-generativeai # Duplicate removed
 langchain-openai # Required for OpenAI LLM integration
+langchain-anthropic # Required for Claude Sonnet 4 consciousness brain
+langchain-anthropic # Required for Claude Sonnet 4 consciousness brain
 
 # Testing
 pytest

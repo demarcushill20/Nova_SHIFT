@@ -166,7 +166,7 @@ async def run_browser_use_gemini_task(
         browser_instance = Browser() # Use default browser config
         print("Initializing browser context...")
         context = await browser_instance.new_context()
-        print("✅ Browser and context initialized.")
+        print("[OK] Browser and context initialized.")
 
         # Create and run the agent
         agent = Agent(
@@ -179,7 +179,7 @@ async def run_browser_use_gemini_task(
         raw_result_text = _get_result_text(raw_result_obj)
         final_output = raw_result_text # Default output is the raw result
 
-        print("\n🎯 Task raw result received.")
+        print("\n>>> Task raw result received.")
         # Optional: Log the raw result length or snippet for debugging
         # print(f"Raw result length: {len(raw_result_text)}")
 
@@ -220,20 +220,20 @@ async def run_browser_use_gemini_task(
 
                     with open(output_filename, 'w', encoding='utf-8') as f:
                         f.write(output_content)
-                    print(f"\n✅ {output_type.capitalize()} saved to: {output_filename}")
+                    print(f"\n[OK] {output_type.capitalize()} saved to: {output_filename}")
                 except Exception as e:
-                    print(f"\n❌ Error saving {output_type} to file: {str(e)}")
+                    print(f"\n[ERROR] Error saving {output_type} to file: {str(e)}")
                     # Continue, as the content is still in final_output
             else:
                  # If no output file, the report/summary is just returned
                  print(f"\n📊 {output_type.capitalize()} generated.")
 
 
-        print("\n✅ Browser-use task complete.")
+        print("\n[OK] Browser-use task complete.")
         return final_output # Return raw result or generated report/summary
 
     except Exception as e:
-        print(f"\n❌ Error occurred during browser-use task execution: {type(e).__name__}: {str(e)}")
+        print(f"\n[ERROR] Error occurred during browser-use task execution: {type(e).__name__}: {str(e)}")
         import traceback
         traceback.print_exc()
         return f"Error during browser-use task execution: {str(e)}" # Return error message
