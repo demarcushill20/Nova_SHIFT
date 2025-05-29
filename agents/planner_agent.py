@@ -253,11 +253,26 @@ class PlannerAgent:
             relationships=relationships
         )
         logger.debug(f"Generated decomposition prompt:\n{prompt}")
+        
+        # CRITICAL DEBUG: Log the actual prompt being sent to Gemini Pro
+        logger.info(f"PROMPT LENGTH: {len(prompt)} characters")
+        logger.info(f"PROMPT PREVIEW (first 500 chars):\n{prompt[:500]}...")
+        logger.info(f"PROMPT PREVIEW (last 500 chars):\n...{prompt[-500:]}")
 
         # 2. Call LLM
         try:
             logger.info("Invoking LLM for plan generation...")
+            
+            # CRITICAL DEBUG: Log LLM client details
+            logger.info(f"LLM CLIENT TYPE: {type(self._llm_client)}")
+            logger.info(f"LLM CLIENT MODEL: {getattr(self._llm_client, 'model_name', 'unknown')}")
+            
             llm_response_content = await self._llm_client.ainvoke(prompt)
+            
+            # CRITICAL DEBUG: Log raw response details
+            logger.info(f"RAW LLM RESPONSE TYPE: {type(llm_response_content)}")
+            logger.info(f"RAW LLM RESPONSE: {repr(llm_response_content)}")
+            
             llm_response = llm_response_content.content if hasattr(llm_response_content, 'content') else str(llm_response_content)
             logger.info("Received LLM response.")
             # CRITICAL: Log response details for debugging

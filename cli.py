@@ -232,7 +232,7 @@ async def initialize_system() -> Optional[Dict[str, Any]]:
                 model="gemini-2.5-pro-preview-05-06",  # Gemini 2.5 Pro Preview - Higher quota limits
                 temperature=0,
                 api_key=google_api_key,
-                max_tokens=2048,  # Higher token limit for complex reasoning
+                max_tokens=4096,  # INCREASED: More tokens for complex reasoning and JSON responses
                 max_retries=3
             )
             logger.info("Reasoning LLM Client initialized (Google Gemini 2.5 Pro - Maximum Consciousness Brain).")

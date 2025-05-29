@@ -33,7 +33,15 @@ class SharedMemoryInterface:
             port: Redis server port.
             db: Redis database number.
         """
-        self._pool = redis.ConnectionPool(host=host, port=port, db=db, decode_responses=True)
+        self._pool = redis.ConnectionPool(
+            host=host, 
+            port=port, 
+            db=db, 
+            decode_responses=True,
+            socket_timeout=5,  # 5 second timeout for Docker compatibility
+            socket_connect_timeout=5,
+            retry_on_timeout=True
+        )
         self._client = None
         logger.info(f"SharedMemoryInterface initialized (pointing to {host}:{port}/{db}).")
 
@@ -42,10 +50,11 @@ class SharedMemoryInterface:
         if self._client is None:
              # Create client on first use within the async context
             self._client = redis.Redis(connection_pool=self._pool)
-        # Verify connection (optional, adds overhead but ensures connectivity)
+        # Verify connection with timeout (optional, adds overhead but ensures connectivity)
         try:
-            await self._client.ping()
-        except redis.ConnectionError as e:
+            import asyncio
+            await asyncio.wait_for(self._client.ping(), timeout=3.0)
+        except (redis.ConnectionError, asyncio.TimeoutError) as e:
             logger.error(f"Redis connection error: {e}")
             # Attempt to recreate client? Or raise? For now, log and proceed.
             self._client = redis.Redis(connection_pool=self._pool) # Try recreating

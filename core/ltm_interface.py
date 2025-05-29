@@ -130,24 +130,40 @@ class LTMInterface:
         results = mcp_results.get("results")
         if results and isinstance(results, list):
             context_parts.append("## Relevant Context (from Nova Memory MCP):")
-            for i, result in enumerate(results[:10]):  # Limit to top 10 for readability
+            # CRITICAL FIX: Reduce from 10 to 5 results to prevent prompt overflow
+            for i, result in enumerate(results[:5]):  # Reduced limit for Gemini Pro compatibility
                 if isinstance(result, dict):
                     text_content = result.get('text', result.get('content', 'N/A'))
+                    
+                    # CRITICAL FIX: Truncate long texts to prevent massive prompts  
+                    max_text_length = 200  # Limit each result to 200 chars
+                    if len(text_content) > max_text_length:
+                        text_content = text_content[:max_text_length] + "..."
+                    
                     score_content = result.get('normalized_score', result.get('score', 0.0))
                     metadata = result.get('metadata', {})
                     source = metadata.get('category', metadata.get('source', 'unknown'))
                     context_parts.append(f"- [{source}] {text_content} (relevance: {score_content:.2f})")
                 else:
                     logger.warning(f"Skipping malformed result item: {result}")
-            logger.info(f"Formatted {len(results)} Nova Memory MCP results for LLM context")
+            
+            total_results = len(results)
+            context_parts.append(f"\n(Showing top 5 of {total_results} total results - reduced for prompt efficiency)")
+            logger.info(f"Formatted {min(5, len(results))} of {len(results)} Nova Memory MCP results for LLM context")
 
         # Fallback to legacy vector results format  
         vector_results = mcp_results.get("vector_results")
         if vector_results and isinstance(vector_results, list) and not results:
             context_parts.append("## Relevant Context (from Vector Search):")
-            for result in vector_results:
+            for result in vector_results[:5]:  # Also limit vector results to 5
                 if isinstance(result, dict):
                     text_content = result.get('text', result.get('content', 'N/A'))
+                    
+                    # Apply same truncation to vector results
+                    max_text_length = 200
+                    if len(text_content) > max_text_length:
+                        text_content = text_content[:max_text_length] + "..."
+                    
                     score_content = result.get('score', 0.0)
                     context_parts.append(f"- {text_content} (relevance: {score_content:.2f})")
                 else:
